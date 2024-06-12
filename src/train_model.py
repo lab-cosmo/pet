@@ -176,7 +176,7 @@ def fit_pet(
 
     pbar = tqdm(range(FITTING_SCHEME.EPOCH_NUM))
 
-    for epoch in pbar:
+    for epoch in range(FITTING_SCHEME.EPOCH_NUM):
 
         model.train(True)
         for batch in train_loader:
@@ -184,13 +184,19 @@ def fit_pet(
                 batch.to(device)
 
             if FITTING_SCHEME.MULTI_GPU:
-                model.module.augmentation = True
-                model.module.create_graph = True
+                if not FITTING_SCHEME.DISABLE_AUGMENTATION:
+                    model.module.augmentation = True
+                    model.module.create_graph = True
                 predictions_energies, predictions_forces = model(batch)
             else:
-                predictions_energies, predictions_forces = model(
-                    batch, augmentation=True, create_graph=True
-                )
+                if FITTING_SCHEME.DISABLE_AUGMENTATION:
+                    predictions_energies, predictions_forces = model(
+                        batch, augmentation=False, create_graph=True
+                    )
+                else:
+                    predictions_energies, predictions_forces = model(
+                        batch, augmentation=True, create_graph=True
+                    )
 
             if FITTING_SCHEME.MULTI_GPU:
                 y_list = [el.y for el in batch]
@@ -241,22 +247,65 @@ def fit_pet(
                     FITTING_SCHEME.USE_SHIFT_AGNOSTIC_LOSS,
                 )
 
+
+            if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+                N = FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE_EXAMPLES
+                assert N >= 2
+
+                E, F = [], []
+
+                for i in range(N):
+                    e, f = model(batch, augmentation=True, create_graph=True)
+                    E.append(e)
+                    F.append(f)
+
+                mean_E = torch.zeros_like(E[0])
+                mean_F = torch.zeros_like(F[0])
+
+                for i in range(N):
+                    mean_E += E[i]
+                    mean_F += F[i]
+
+                mean_E /= N
+                mean_F /= N
+
+                variance_loss_E = torch.zeros_like(E[0])
+                variance_loss_F = torch.zeros_like(F[0])
+                for i in range(N):
+                    variance_loss_E += (mean_E - E[i]) ** 2
+                    variance_loss_F += (mean_F - F[i]) ** 2
+
+                variance_loss_E /= N
+                variance_loss_F /= N
+
+                variance_loss = torch.mean(variance_loss_E) + torch.mean(variance_loss_F)
+
+
             if MLIP_SETTINGS.USE_ENERGIES and MLIP_SETTINGS.USE_FORCES:
                 loss = FITTING_SCHEME.ENERGY_WEIGHT * loss_energies / (
                     sliding_energies_rmse**2
                 ) + loss_forces / (sliding_forces_rmse**2)
+                if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+                    loss += variance_loss
+
                 loss.backward()
 
             if MLIP_SETTINGS.USE_ENERGIES and (not MLIP_SETTINGS.USE_FORCES):
                 loss_energies.backward()
+                if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+                    raise RuntimeError # just make sure we don't make a mistake
             if MLIP_SETTINGS.USE_FORCES and (not MLIP_SETTINGS.USE_ENERGIES):
                 loss_forces.backward()
+                if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+                    raise RuntimeError # just make sure we don't make a mistake
 
             if FITTING_SCHEME.DO_GRADIENT_CLIPPING:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
                     max_norm=FITTING_SCHEME.GRADIENT_CLIPPING_MAX_NORM,
                 )
+
+
             optim.step()
             optim.zero_grad()
 
@@ -310,6 +359,10 @@ def fit_pet(
                 forces_logger.val_logger.update(predictions_forces, batch_forces)
 
         now = {}
+        if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+            now["rotational_variance_loss"] = float(variance_loss.detach().mean().cpu().numpy())
+            now["rotational_variance_loss_E"] = float(variance_loss_E.detach().mean().cpu().numpy())
+            now["rotational_variance_loss_F"] = float(variance_loss_F.detach().mean().cpu().numpy())
 
         if FITTING_SCHEME.ENERGIES_LOSS == "per_structure":
             energies_key = "energies per structure"
@@ -368,26 +421,30 @@ def fit_pet(
             )
 
         val_mae_message = "val mae/rmse "
-        train_mae_message = "train mae/rmse "
+        train_mae_message = " train mae/rmse "
 
         if MLIP_SETTINGS.USE_ENERGIES:
             val_mae_message += energies_key + ": "
             train_mae_message += energies_key + ": "
-            val_mae_message += f" {now[energies_key]['val']['mae']}/{now[energies_key]['val']['rmse']};"
-            train_mae_message += f" {now[energies_key]['train']['mae']}/{now[energies_key]['train']['rmse']};"
+            val_mae_message += f" {now[energies_key]['val']['mae']:.2e}/{now[energies_key]['val']['rmse']:.2e};"
+            train_mae_message += f" {now[energies_key]['train']['mae']:.2e}/{now[energies_key]['train']['rmse']:.2e};"
         if MLIP_SETTINGS.USE_FORCES:
             val_mae_message += "forces per component: "
             train_mae_message += "forces per component: "
             val_mae_message += (
-                f" {now['forces']['val']['mae']}/{now['forces']['val']['rmse']}"
+                f" {now['forces']['val']['mae']:.2e}/{now['forces']['val']['rmse']:.2e}"
             )
             train_mae_message += (
-                f" {now['forces']['train']['mae']}/{now['forces']['train']['rmse']}"
+                f" {now['forces']['train']['mae']:.2e}/{now['forces']['train']['rmse']:.2e}"
             )
 
-        pbar.set_description(
-            f"lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
-        )
+        # pbar.set_description(
+        #     f"lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
+        # )
+
+        print(f"{epoch} lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message)
+        if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
+            print(f"... variance_loss: {now['rotational_variance_loss']:.2e} (E {now['rotational_variance_loss_E']:.1e}, F {now['rotational_variance_loss_F']:.1e})")
 
         history.append(now)
         scheduler.step()
