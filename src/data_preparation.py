@@ -40,7 +40,7 @@ def get_pyg_graphs(
         Molecule(
             structure, R_CUT, USE_ADDITIONAL_SCALAR_ATTRIBUTES, USE_LONG_RANGE, K_CUT
         )
-        for structure in tqdm(structures)
+        for structure in structures
     ]
 
     max_nums = [molecule.get_max_num() for molecule in molecules]
@@ -54,7 +54,7 @@ def get_pyg_graphs(
 
     pyg_graphs = [
         molecule.get_graph(max_num, all_species, max_k_num)
-        for molecule in tqdm(molecules)
+        for molecule in molecules
     ]
     return pyg_graphs
 

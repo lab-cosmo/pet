@@ -5,6 +5,7 @@ import numpy as np
 from torch.optim.lr_scheduler import LambdaLR
 from scipy.spatial.transform import Rotation
 from torch_geometric.loader import DataLoader, DataListLoader, DynamicBatchSampler
+from torch.utils.data import DistributedSampler
 import copy
 from scipy.special import roots_legendre
 from scipy.spatial.transform import Rotation as R
@@ -321,7 +322,7 @@ def load_checkpoint(model, optim, scheduler, checkpoint_path):
     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
 
-def get_data_loaders(train_graphs, val_graphs, FITTING_SCHEME):
+def get_data_loaders(train_graphs, val_graphs, FITTING_SCHEME, distributed_info):
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         numpy.random.seed(worker_seed)
@@ -329,6 +330,15 @@ def get_data_loaders(train_graphs, val_graphs, FITTING_SCHEME):
 
     g = torch.Generator()
     g.manual_seed(FITTING_SCHEME.RANDOM_SEED)
+
+    if FITTING_SCHEME.DISTRIBUTED and FITTING_SCHEME.BALANCED_DATA_LOADER:
+        raise ValueError(
+            "Distributed and balanced dataloader are mutually exclusive."
+        )
+    if FITTING_SCHEME.DISTRIBUTED and FITTING_SCHEME.MULTI_GPU:
+        raise ValueError(
+            "Distributed and multi-GPU are mutually exclusive."
+        )
 
     if FITTING_SCHEME.BALANCED_DATA_LOADER:
         train_sampler = DynamicBatchSampler(
@@ -387,17 +397,44 @@ def get_data_loaders(train_graphs, val_graphs, FITTING_SCHEME):
                 generator=g,
             )
         else:
+            # handle distributed case
+            if FITTING_SCHEME.DISTRIBUTED:
+                rank, world_size = distributed_info
+                train_sampler = DistributedSampler(
+                    train_graphs,
+                    num_replicas=world_size,
+                    rank=rank,
+                    shuffle=True,
+                    drop_last=True,
+                )
+                val_sampler = DistributedSampler(
+                    val_graphs,
+                    num_replicas=world_size,
+                    rank=rank,
+                    shuffle=False,
+                    drop_last=False,
+                )
+            else:
+                train_sampler, val_sampler = None, None
             train_loader = DataLoader(
                 train_graphs,
                 batch_size=FITTING_SCHEME.STRUCTURAL_BATCH_SIZE,
-                shuffle=True,
+                sampler=train_sampler,
+                shuffle=(
+                    train_sampler is None
+                ),
+                drop_last=(
+                    train_sampler is None
+                ),
                 worker_init_fn=seed_worker,
                 generator=g,
             )
             val_loader = DataLoader(
                 val_graphs,
                 batch_size=FITTING_SCHEME.STRUCTURAL_BATCH_SIZE,
+                sampler=val_sampler,
                 shuffle=False,
+                drop_last=False,
                 worker_init_fn=seed_worker,
                 generator=g,
             )

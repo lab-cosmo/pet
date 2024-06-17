@@ -21,6 +21,8 @@ import argparse
 from .data_preparation import get_pyg_graphs, update_pyg_graphs, get_forces
 from .utilities import dtype2string, string2dtype
 from .pet import FlagsWrapper
+import torch.distributed
+from torch.nn.parallel import DistributedDataParallel
 
 
 def fit_pet(
@@ -33,7 +35,7 @@ def fit_pet(
 ):
     TIME_SCRIPT_STARTED = time.time()
 
-    if not os.path.exists(output_dir):
+    if not os.path.exists(output_dir) and rank == 0:
         os.mkdir(output_dir)
 
     hypers = Hypers(hypers_dict)
@@ -43,6 +45,17 @@ def fit_pet(
     FITTING_SCHEME = hypers.FITTING_SCHEME
     MLIP_SETTINGS = hypers.MLIP_SETTINGS
     ARCHITECTURAL_HYPERS = hypers.ARCHITECTURAL_HYPERS
+
+    distributed = FITTING_SCHEME.DISTRIBUTED
+    if distributed:
+        print("DIST", distributed)
+        rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+        if rank == 0:
+            print(f"Training on {world_size} GPUs")
+    else:
+        rank = 0
+        world_size = 1
 
     if FITTING_SCHEME.USE_SHIFT_AGNOSTIC_LOSS:
         raise ValueError(
@@ -64,14 +77,17 @@ def fit_pet(
     name_to_load, NAME_OF_CALCULATION = get_calc_names(
         os.listdir(output_dir), name_of_calculation
     )
+    name_to_load = None
 
-    os.mkdir(f"{output_dir}/{NAME_OF_CALCULATION}")
-    np.save(f"{output_dir}/{NAME_OF_CALCULATION}/all_species.npy", all_species)
-    hypers.UTILITY_FLAGS.CALCULATION_TYPE = "mlip"
-    save_hypers(hypers, f"{output_dir}/{NAME_OF_CALCULATION}/hypers_used.yaml")
+    print(f"Hello1 {rank}")
 
-    print(len(train_structures))
-    print(len(val_structures))
+    if rank == 0:
+        os.mkdir(f"{output_dir}/{NAME_OF_CALCULATION}")
+        np.save(f"{output_dir}/{NAME_OF_CALCULATION}/all_species.npy", all_species)
+        hypers.UTILITY_FLAGS.CALCULATION_TYPE = "mlip"
+        save_hypers(hypers, f"{output_dir}/{NAME_OF_CALCULATION}/hypers_used.yaml")
+
+    print(f"Hello2 {rank}")
 
     train_graphs = get_pyg_graphs(
         train_structures,
@@ -90,14 +106,17 @@ def fit_pet(
         ARCHITECTURAL_HYPERS.K_CUT,
     )
 
+    print(f"Hello3 {rank}")
+
     if MLIP_SETTINGS.USE_ENERGIES:
         self_contributions = get_self_contributions(
             MLIP_SETTINGS.ENERGY_KEY, train_structures, all_species
         )
-        np.save(
-            f"{output_dir}/{NAME_OF_CALCULATION}/self_contributions.npy",
-            self_contributions,
-        )
+        if rank == 0:
+            np.save(
+                f"{output_dir}/{NAME_OF_CALCULATION}/self_contributions.npy",
+                self_contributions,
+            )
 
         train_energies = get_corrected_energies(
             MLIP_SETTINGS.ENERGY_KEY, train_structures, all_species, self_contributions
@@ -117,7 +136,7 @@ def fit_pet(
         update_pyg_graphs(val_graphs, "forces", val_forces)
 
     train_loader, val_loader = get_data_loaders(
-        train_graphs, val_graphs, FITTING_SCHEME
+        train_graphs, val_graphs, FITTING_SCHEME, (rank, world_size)
     )
 
     model = PET(ARCHITECTURAL_HYPERS, 0.0, len(all_species)).to(device)
@@ -131,6 +150,9 @@ def fit_pet(
     if FITTING_SCHEME.MODEL_TO_START_WITH is not None:
         model.load_state_dict(torch.load(FITTING_SCHEME.MODEL_TO_START_WITH))
         model = model.to(dtype=dtype)
+
+    if FITTING_SCHEME.DISTRIBUTED:
+        model = DistributedDataParallel(model, device_ids=[device], find_unused_parameters=True)
 
     optim = get_optimizer(model, FITTING_SCHEME)
     scheduler = get_scheduler(optim, FITTING_SCHEME)
@@ -174,14 +196,32 @@ def fit_pet(
         multiplication_rmse_model_keeper = ModelKeeper()
         multiplication_mae_model_keeper = ModelKeeper()
 
-    pbar = tqdm(range(FITTING_SCHEME.EPOCH_NUM))
+    print(f"Hello4 {rank}")
 
-    for epoch in pbar:
+    # pbar = tqdm(range(FITTING_SCHEME.EPOCH_NUM)) #, disable=(rank != 0))
+
+    print(f"Hello5 {rank}")
+
+    for epoch in range(FITTING_SCHEME.EPOCH_NUM):
+        print(f"Hello6 {rank}")
+        print(f"Hello7 {rank}")
+
+        if distributed:
+            train_loader.sampler.set_epoch(epoch)
 
         model.train(True)
+        print(f"Hello from {rank}")
         for batch in train_loader:
+            print(len(train_loader))
+            if distributed:
+                torch.distributed.barrier()
+
+            print(f"batch {rank}", device, next(model.parameters()).device)
+
             if not FITTING_SCHEME.MULTI_GPU:
                 batch.to(device)
+
+            print(f"batch {rank}", device, next(model.parameters()).device)
 
             if FITTING_SCHEME.MULTI_GPU:
                 model.module.augmentation = True
@@ -191,6 +231,8 @@ def fit_pet(
                 predictions_energies, predictions_forces = model(
                     batch, augmentation=True, create_graph=True
                 )
+
+            print(f"batch {rank}", device, next(model.parameters()).device)
 
             if FITTING_SCHEME.MULTI_GPU:
                 y_list = [el.y for el in batch]
@@ -202,8 +244,6 @@ def fit_pet(
                 batch_n_atoms = torch.tensor(
                     n_atoms_list, dtype=torch.get_default_dtype(), device=device
                 )
-                # print('batch_y: ', batch_y.shape)
-                # print('batch_n_atoms: ', batch_n_atoms.shape)
 
             else:
                 batch_y = batch.y
@@ -257,17 +297,19 @@ def fit_pet(
                     model.parameters(),
                     max_norm=FITTING_SCHEME.GRADIENT_CLIPPING_MAX_NORM,
                 )
+            print(f"batch {rank}", device, next(model.parameters()).device)
             optim.step()
             optim.zero_grad()
 
         model.train(False)
+
         for batch in val_loader:
             if not FITTING_SCHEME.MULTI_GPU:
                 batch.to(device)
 
             if FITTING_SCHEME.MULTI_GPU:
-                model.module.augmentation = False
-                model.module.create_graph = False
+                (model.module if distributed else model).module.augmentation = False
+                (model.module if distributed else model).module.create_graph = False
                 predictions_energies, predictions_forces = model(batch)
             else:
                 predictions_energies, predictions_forces = model(
@@ -285,8 +327,6 @@ def fit_pet(
                     n_atoms_list, dtype=torch.get_default_dtype(), device=device
                 )
 
-                # print('batch_y: ', batch_y.shape)
-                # print('batch_n_atoms: ', batch_n_atoms.shape)
             else:
                 batch_y = batch.y
                 batch_n_atoms = batch.n_atoms
@@ -385,9 +425,9 @@ def fit_pet(
                 f" {now['forces']['train']['mae']}/{now['forces']['train']['rmse']}"
             )
 
-        pbar.set_description(
-            f"lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
-        )
+        # pbar.set_description(
+        #     f"lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
+        # )
 
         history.append(now)
         scheduler.step()
@@ -395,6 +435,9 @@ def fit_pet(
         if FITTING_SCHEME.MAX_TIME is not None:
             if elapsed > FITTING_SCHEME.MAX_TIME:
                 break
+
+        # if distributed:
+        #     torch.distributed.barrier()
 
     torch.save(
         {
@@ -440,10 +483,12 @@ def fit_pet(
         save_model("best_val_rmse_both_model", multiplication_rmse_model_keeper)
         summary += f"best both (multiplication) rmse in energies {postfix}: {multiplication_rmse_model_keeper.additional_info[0]} in forces: {multiplication_rmse_model_keeper.additional_info[1]} at epoch {multiplication_rmse_model_keeper.best_epoch}\n"
 
-    with open(f"{output_dir}/{NAME_OF_CALCULATION}/summary.txt", "w") as f:
-        print(summary, file=f)
+    if rank == 0:
+        with open(f"{output_dir}/{NAME_OF_CALCULATION}/summary.txt", "w") as f:
+            print(summary, file=f)
 
-    print("total elapsed time: ", time.time() - TIME_SCRIPT_STARTED)
+    if rank == 0:
+        print("total elapsed time: ", time.time() - TIME_SCRIPT_STARTED)
 
 
 def main():
