@@ -415,55 +415,54 @@ def fit_pet(
             if elapsed > FITTING_SCHEME.MAX_TIME:
                 break
 
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "optim_state_dict": optim.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-            "dtype_used": dtype2string(dtype),
-        },
-        f"{output_dir}/{NAME_OF_CALCULATION}/checkpoint",
-    )
-    with open(f"{output_dir}/{NAME_OF_CALCULATION}/history.pickle", "wb") as f:
-        pickle.dump(history, f)
-
-    def save_model(model_name, model_keeper):
-        torch.save(
-            model_keeper.best_model.state_dict(),
-            f"{output_dir}/{NAME_OF_CALCULATION}/{model_name}_state_dict",
-        )
-
-    summary = ""
-    if MLIP_SETTINGS.USE_ENERGIES:
-        if FITTING_SCHEME.ENERGIES_LOSS == "per_structure":
-            postfix = "per structure"
-        if FITTING_SCHEME.ENERGIES_LOSS == "per_atom":
-            postfix = "per atom"
-        save_model("best_val_mae_energies_model", energies_mae_model_keeper)
-        summary += f"best val mae in energies {postfix}: {energies_mae_model_keeper.best_error} at epoch {energies_mae_model_keeper.best_epoch}\n"
-
-        save_model("best_val_rmse_energies_model", energies_rmse_model_keeper)
-        summary += f"best val rmse in energies {postfix}: {energies_rmse_model_keeper.best_error} at epoch {energies_rmse_model_keeper.best_epoch}\n"
-
-    if MLIP_SETTINGS.USE_FORCES:
-        save_model("best_val_mae_forces_model", forces_mae_model_keeper)
-        summary += f"best val mae in forces: {forces_mae_model_keeper.best_error} at epoch {forces_mae_model_keeper.best_epoch}\n"
-
-        save_model("best_val_rmse_forces_model", forces_rmse_model_keeper)
-        summary += f"best val rmse in forces: {forces_rmse_model_keeper.best_error} at epoch {forces_rmse_model_keeper.best_epoch}\n"
-
-    if MLIP_SETTINGS.USE_ENERGIES and MLIP_SETTINGS.USE_FORCES:
-        save_model("best_val_mae_both_model", multiplication_mae_model_keeper)
-        summary += f"best both (multiplication) mae in energies {postfix}: {multiplication_mae_model_keeper.additional_info[0]} in forces: {multiplication_mae_model_keeper.additional_info[1]} at epoch {multiplication_mae_model_keeper.best_epoch}\n"
-
-        save_model("best_val_rmse_both_model", multiplication_rmse_model_keeper)
-        summary += f"best both (multiplication) rmse in energies {postfix}: {multiplication_rmse_model_keeper.additional_info[0]} in forces: {multiplication_rmse_model_keeper.additional_info[1]} at epoch {multiplication_rmse_model_keeper.best_epoch}\n"
-
     if rank == 0:
+        torch.save(
+            {
+                "model_state_dict": (model.module if distributed else model).state_dict(),
+                "optim_state_dict": optim.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "dtype_used": dtype2string(dtype),
+            },
+            f"{output_dir}/{NAME_OF_CALCULATION}/checkpoint",
+        )
+        with open(f"{output_dir}/{NAME_OF_CALCULATION}/history.pickle", "wb") as f:
+            pickle.dump(history, f)
+
+        def save_model(model_name, model_keeper):
+            torch.save(
+                (model_keeper.best_model.module.state_dict() if distributed else model_keeper.best_model.state_dict()),
+                f"{output_dir}/{NAME_OF_CALCULATION}/{model_name}_state_dict",
+            )
+
+        summary = ""
+        if MLIP_SETTINGS.USE_ENERGIES:
+            if FITTING_SCHEME.ENERGIES_LOSS == "per_structure":
+                postfix = "per structure"
+            if FITTING_SCHEME.ENERGIES_LOSS == "per_atom":
+                postfix = "per atom"
+            save_model("best_val_mae_energies_model", energies_mae_model_keeper)
+            summary += f"best val mae in energies {postfix}: {energies_mae_model_keeper.best_error} at epoch {energies_mae_model_keeper.best_epoch}\n"
+
+            save_model("best_val_rmse_energies_model", energies_rmse_model_keeper)
+            summary += f"best val rmse in energies {postfix}: {energies_rmse_model_keeper.best_error} at epoch {energies_rmse_model_keeper.best_epoch}\n"
+
+        if MLIP_SETTINGS.USE_FORCES:
+            save_model("best_val_mae_forces_model", forces_mae_model_keeper)
+            summary += f"best val mae in forces: {forces_mae_model_keeper.best_error} at epoch {forces_mae_model_keeper.best_epoch}\n"
+
+            save_model("best_val_rmse_forces_model", forces_rmse_model_keeper)
+            summary += f"best val rmse in forces: {forces_rmse_model_keeper.best_error} at epoch {forces_rmse_model_keeper.best_epoch}\n"
+
+        if MLIP_SETTINGS.USE_ENERGIES and MLIP_SETTINGS.USE_FORCES:
+            save_model("best_val_mae_both_model", multiplication_mae_model_keeper)
+            summary += f"best both (multiplication) mae in energies {postfix}: {multiplication_mae_model_keeper.additional_info[0]} in forces: {multiplication_mae_model_keeper.additional_info[1]} at epoch {multiplication_mae_model_keeper.best_epoch}\n"
+
+            save_model("best_val_rmse_both_model", multiplication_rmse_model_keeper)
+            summary += f"best both (multiplication) rmse in energies {postfix}: {multiplication_rmse_model_keeper.additional_info[0]} in forces: {multiplication_rmse_model_keeper.additional_info[1]} at epoch {multiplication_rmse_model_keeper.best_epoch}\n"
+
         with open(f"{output_dir}/{NAME_OF_CALCULATION}/summary.txt", "w") as f:
             print(summary, file=f)
 
-    if rank == 0:
         print("total elapsed time: ", time.time() - TIME_SCRIPT_STARTED)
 
 
