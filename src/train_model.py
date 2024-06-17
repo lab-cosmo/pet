@@ -48,7 +48,6 @@ def fit_pet(
 
     distributed = FITTING_SCHEME.DISTRIBUTED
     if distributed:
-        print("DIST", distributed)
         rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
         if rank == 0:
@@ -79,15 +78,11 @@ def fit_pet(
     )
     name_to_load = None
 
-    print(f"Hello1 {rank}")
-
     if rank == 0:
         os.mkdir(f"{output_dir}/{NAME_OF_CALCULATION}")
         np.save(f"{output_dir}/{NAME_OF_CALCULATION}/all_species.npy", all_species)
         hypers.UTILITY_FLAGS.CALCULATION_TYPE = "mlip"
         save_hypers(hypers, f"{output_dir}/{NAME_OF_CALCULATION}/hypers_used.yaml")
-
-    print(f"Hello2 {rank}")
 
     train_graphs = get_pyg_graphs(
         train_structures,
@@ -105,8 +100,6 @@ def fit_pet(
         ARCHITECTURAL_HYPERS.USE_LONG_RANGE,
         ARCHITECTURAL_HYPERS.K_CUT,
     )
-
-    print(f"Hello3 {rank}")
 
     if MLIP_SETTINGS.USE_ENERGIES:
         self_contributions = get_self_contributions(
@@ -196,32 +189,20 @@ def fit_pet(
         multiplication_rmse_model_keeper = ModelKeeper()
         multiplication_mae_model_keeper = ModelKeeper()
 
-    print(f"Hello4 {rank}")
-
     # pbar = tqdm(range(FITTING_SCHEME.EPOCH_NUM)) #, disable=(rank != 0))
 
-    print(f"Hello5 {rank}")
-
     for epoch in range(FITTING_SCHEME.EPOCH_NUM):
-        print(f"Hello6 {rank}")
-        print(f"Hello7 {rank}")
 
         if distributed:
             train_loader.sampler.set_epoch(epoch)
 
         model.train(True)
-        print(f"Hello from {rank}")
         for batch in train_loader:
-            print(len(train_loader))
             if distributed:
                 torch.distributed.barrier()
 
-            print(f"batch {rank}", device, next(model.parameters()).device)
-
             if not FITTING_SCHEME.MULTI_GPU:
                 batch.to(device)
-
-            print(f"batch {rank}", device, next(model.parameters()).device)
 
             if FITTING_SCHEME.MULTI_GPU:
                 model.module.augmentation = True
@@ -231,8 +212,6 @@ def fit_pet(
                 predictions_energies, predictions_forces = model(
                     batch, augmentation=True, create_graph=True
                 )
-
-            print(f"batch {rank}", device, next(model.parameters()).device)
 
             if FITTING_SCHEME.MULTI_GPU:
                 y_list = [el.y for el in batch]
@@ -297,7 +276,6 @@ def fit_pet(
                     model.parameters(),
                     max_norm=FITTING_SCHEME.GRADIENT_CLIPPING_MAX_NORM,
                 )
-            print(f"batch {rank}", device, next(model.parameters()).device)
             optim.step()
             optim.zero_grad()
 
@@ -425,9 +403,10 @@ def fit_pet(
                 f" {now['forces']['train']['mae']}/{now['forces']['train']['rmse']}"
             )
 
-        # pbar.set_description(
-        #     f"lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
-        # )
+        if rank == 0:
+            print(
+                f"Epoch {epoch}; lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
+            )
 
         history.append(now)
         scheduler.step()
@@ -435,9 +414,6 @@ def fit_pet(
         if FITTING_SCHEME.MAX_TIME is not None:
             if elapsed > FITTING_SCHEME.MAX_TIME:
                 break
-
-        # if distributed:
-        #     torch.distributed.barrier()
 
     torch.save(
         {
