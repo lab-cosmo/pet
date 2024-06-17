@@ -405,7 +405,7 @@ def fit_pet(
 
         if rank == 0:
             print(
-                f"Epoch {epoch}; lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
+                f"Epoch {epoch}/{FITTING_SCHEME.EPOCH_NUM}; lr: {scheduler.get_last_lr()}; " + val_mae_message + train_mae_message
             )
 
         history.append(now)
