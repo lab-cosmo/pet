@@ -286,7 +286,7 @@ def fit_pet(
                     sliding_energies_rmse**2
                 ) + loss_forces / (sliding_forces_rmse**2)
                 if FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE:
-                    loss += variance_loss
+                    loss += FITTING_SCHEME.MINIMISE_ROTATIONAL_VARIANCE_WEIGHT * variance_loss
 
                 loss.backward()
 
