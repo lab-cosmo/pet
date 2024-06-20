@@ -372,16 +372,12 @@ def report_accuracy(
         specification = "per component"
     else:
         specification = ""
-        
-    if ground_truth is not None:
-        print(
-            f"{target_name} mae {specification}: {get_mae(predictions_mean, ground_truth, support_missing_values = support_missing_values)}"
-        )
-        print(
-            f"{target_name} rmse {specification}: {get_rmse(predictions_mean, ground_truth, support_missing_values=support_missing_values)}"
-        )
-    else:
-        print(f"ground truth target for {target_name} is not provided (or is provided with a wrong key). Thus, it is impossible to estimate the error between predictions and ground truth target")
+    print(
+        f"{target_name} mae {specification}: {get_mae(predictions_mean, ground_truth, support_missing_values = support_missing_values)}"
+    )
+    print(
+        f"{target_name} rmse {specification}: {get_rmse(predictions_mean, ground_truth, support_missing_values=support_missing_values)}"
+    )
 
     if all_predictions.shape[0] > 1:
         predictions_std, predictions_mad = get_rotational_discrepancy(all_predictions)
@@ -397,30 +393,25 @@ def report_accuracy(
     if target_type == "structural":
         if len(predictions_mean.shape) == 1:
             predictions_mean = predictions_mean[:, np.newaxis]
+        if len(ground_truth.shape) == 1:
+            ground_truth = ground_truth[:, np.newaxis]
+
         predictions_mean_per_atom = predictions_mean / n_atoms[:, np.newaxis]
-        
-        
-        if ground_truth is not None:
-            if len(ground_truth.shape) == 1:
-                ground_truth = ground_truth[:, np.newaxis]
+        ground_truth_per_atom = ground_truth / n_atoms[:, np.newaxis]
 
-            ground_truth_per_atom = ground_truth / n_atoms[:, np.newaxis]
-
-            print(
-                f"{target_name} mae per atom {specification}: {get_mae(predictions_mean_per_atom, ground_truth_per_atom, support_missing_values = support_missing_values)}"
-            )
-            print(
-                f"{target_name} rmse per atom {specification}: {get_rmse(predictions_mean_per_atom, ground_truth_per_atom, support_missing_values=support_missing_values)}"
-            )
+        print(
+            f"{target_name} mae per atom {specification}: {get_mae(predictions_mean_per_atom, ground_truth_per_atom, support_missing_values = support_missing_values)}"
+        )
+        print(
+            f"{target_name} rmse per atom {specification}: {get_rmse(predictions_mean_per_atom, ground_truth_per_atom, support_missing_values=support_missing_values)}"
+        )
 
         if all_predictions.shape[0] > 1:
             if len(all_predictions.shape) == 2:
                 all_predictions = all_predictions[:, :, np.newaxis]
-            all_predictions_per_atom = (
-                all_predictions / n_atoms[np.newaxis, :, np.newaxis]
-            )
-            predictions_std_per_atom, predictions_mad_per_atom = (
-                get_rotational_discrepancy(all_predictions_per_atom)
+            all_predictions_per_atom = all_predictions / n_atoms[np.newaxis, :, np.newaxis]
+            predictions_std_per_atom, predictions_mad_per_atom = get_rotational_discrepancy(
+                all_predictions_per_atom
             )
             if verbose:
                 print(
@@ -453,7 +444,7 @@ def get_quadrature(L):
             for v, weight in zip(all_v, weights_now):
                 weights.append(weight)
                 angles = [theta, v, w]
-                rotation = R.from_euler("zxz", angles, degrees=False)
+                rotation = R.from_euler("xyz", angles, degrees=False)
                 rotation_matrix = rotation.as_matrix()
                 matrices.append(rotation_matrix)
 
@@ -481,8 +472,11 @@ def string2dtype(string):
 
     raise ValueError("unknown dtype")
 
-def get_quadrature_predictions(batch, model, quadrature_order, inversions, dtype):
-    x_initial = batch.x.clone()
+
+def get_quadrature_predictions(
+    graph, model, quadrature_order, inversions, dtype, batch_size=2
+):
+    from torch_geometric.data import Batch
 
     if quadrature_order is not None:
         rotations, weights = get_quadrature(quadrature_order)
@@ -499,22 +493,62 @@ def get_quadrature_predictions(batch, model, quadrature_order, inversions, dtype
         inverse_rotations += [-r for r in inverse_rotations]
         weights += weights
 
-    energy_mean, forces_mean, total_weight = 0.0, 0.0, 0.0
-    for rotation, inverse, weight in zip(rotations, inverse_rotations, weights):
-        rotation = torch.tensor(rotation, device = batch.x.device, dtype = dtype)
-        inverse = torch.tensor(inverse, device = batch.x.device, dtype = dtype)
+    if batch_size > 1:
+        energy_mean, forces_mean, total_weight = 0.0, 0.0, 0.0
+        for pos in range(0, len(rotations), batch_size):
+            batch_rotations = np.array(rotations[pos : pos + batch_size])
+            batch_inverse_rotations = np.array(inverse_rotations[pos : pos + batch_size])
 
-        batch_rotations = rotation[None, :].repeat(batch.num_nodes, 1, 1)
-        batch.x = torch.bmm(x_initial, batch_rotations)
-        energy, forces = model(
-            batch, augmentation=False, create_graph=False
-        )
-        # rotate forces back into original frame of reference
-        forces = torch.matmul(forces, inverse[None, :, :])
+            bs = len(batch_rotations)
 
-        energy_mean += energy.data.cpu().numpy() * weight
-        forces_mean += forces.data.cpu().numpy() * weight
-        total_weight += weight
+            batch = Batch.from_data_list([graph.clone() for i in range(bs)])
+            
+            batch_rotations = torch.tensor(batch_rotations, device=graph.x.device, dtype=dtype)
+            batch_rotations = batch_rotations.repeat_interleave(graph.num_nodes, dim=0)
+
+            batch.x = torch.bmm(batch.x, batch_rotations)
+
+            energy, forces = model(batch, augmentation=False, create_graph=False)
+
+            batch_inverse_rotations = torch.tensor(batch_inverse_rotations, device=graph.x.device, dtype=dtype)
+            
+            batch_weights = np.array(weights[pos : pos + batch_size])
+            total_weight += batch_weights.sum()
+
+            batch_weights = torch.tensor(batch_weights, device=graph.x.device, dtype=dtype)
+
+            energy = energy.detach()
+            energy = energy * batch_weights
+            energy = energy.sum()
+
+            forces = forces.detach().reshape(bs, graph.n_atoms, -1)
+            forces = torch.bmm(forces, batch_inverse_rotations)
+            forces = forces * batch_weights.unsqueeze(-1).unsqueeze(-1)
+            forces = forces.sum(dim=0)
+
+            energy_mean += energy.data.cpu().numpy()
+            forces_mean += forces.data.cpu().numpy()
+
+
+    else:
+
+        x_initial = graph.x.clone()
+        energy_mean, forces_mean, total_weight = 0.0, 0.0, 0.0
+        for rotation, inverse, weight in zip(rotations, inverse_rotations, weights):
+            rotation = torch.tensor(rotation, device=graph.x.device, dtype=dtype)
+            inverse = torch.tensor(inverse, device=graph.x.device, dtype=dtype)
+
+            batch_rotations = rotation[None, :].repeat(graph.num_nodes, 1, 1)
+            graph.x = torch.bmm(x_initial, batch_rotations)
+            energy, forces = model(graph, augmentation=False, create_graph=False)
+            # rotate forces back into original frame of reference
+            forces = torch.matmul(forces, inverse[None, :, :])
+
+            # print(energy.data.cpu().numpy())
+
+            energy_mean += energy.data.cpu().numpy() * weight
+            forces_mean += forces.data.cpu().numpy() * weight
+            total_weight += weight
 
     energy_mean /= total_weight
     forces_mean /= total_weight

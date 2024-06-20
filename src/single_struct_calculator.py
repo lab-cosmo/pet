@@ -8,16 +8,10 @@ from .hypers import load_hypers_from_file
 from .pet import PET, PETMLIPWrapper, PETUtilityWrapper
 from .utilities import string2dtype, get_quadrature_predictions
 
-
 class SingleStructCalculator:
     def __init__(
-        self, path_to_calc_folder, checkpoint="best_val_rmse_both_model", device="cpu", quadrature_order=None, inversions=False,
-        use_augmentation=False
+        self, path_to_calc_folder, checkpoint="best_val_rmse_both_model", device="cpu", quadrature_order=None, inversions=False, batch_size=1
     ):
-        if (quadrature_order is not None) and (use_augmentation):
-            raise NotImplementedError("Simultaneous use of a quadrature and augmentation is not yet implemented")
-
-        self.use_augmentation = use_augmentation
         hypers_path = path_to_calc_folder + "/hypers_used.yaml"
         path_to_model_state_dict = (
             path_to_calc_folder + "/" + checkpoint + "_state_dict"
@@ -43,13 +37,12 @@ class SingleStructCalculator:
         model = PETMLIPWrapper(
             model, MLIP_SETTINGS.USE_ENERGIES, MLIP_SETTINGS.USE_FORCES
         )
-        if torch.cuda.is_available() and (torch.cuda.device_count() > 1):
+        if FITTING_SCHEME.MULTI_GPU and torch.cuda.is_available():
             model = DataParallel(model)
             model = model.to(torch.device("cuda:0"))
 
         model.load_state_dict(
-            torch.load(path_to_model_state_dict,
-                       map_location=torch.device(device))
+            torch.load(path_to_model_state_dict, map_location=torch.device(device))
         )
         model.eval()
 
@@ -64,6 +57,7 @@ class SingleStructCalculator:
             self.quadrature_order = None
 
         self.inversions = inversions
+        self.batch_size = batch_size
 
     def forward(self, structure):
         molecule = MoleculeCPP(
@@ -85,22 +79,16 @@ class SingleStructCalculator:
             graph.num_nodes, dtype=torch.long, device=graph.x.device
         )
         graph = graph.to(self.device)
-
-        if self.quadrature_order is None:
-            if torch.cuda.is_available() and (torch.cuda.device_count() > 1):
-                self.model.module.augmentation = self.use_augmentation
-                self.model.module.create_graph = False
-                prediction_energy, prediction_forces = self.model([graph])
-            else:
-                prediction_energy, prediction_forces = self.model(
-                    graph, augmentation=self.use_augmentation, create_graph=False
-                )
-
+        
+        if self.quadrature_order is None and not self.inversions:
+            prediction_energy, prediction_forces = self.model(
+                graph, augmentation=False, create_graph=False
+            )
             prediction_energy_final = prediction_energy.data.cpu().numpy()
             prediction_forces_final = prediction_forces.data.cpu().numpy()
         else:
             prediction_energy_final, prediction_forces_final = get_quadrature_predictions(
-                graph, self.model, self.quadrature_order, self.inversions, string2dtype(self.architectural_hypers.DTYPE)
+                graph, self.model, self.quadrature_order, self.inversions, string2dtype(self.architectural_hypers.DTYPE), batch_size=self.batch_size
             )
 
         compositional_features = get_compositional_features(
@@ -109,8 +97,5 @@ class SingleStructCalculator:
         self_contributions_energy = np.dot(
             compositional_features, self.self_contributions
         )
-
-        # MC self_contributions_energy can be yuge and fuck up precision in well single precision
-        # taking it out for now, probably we should add an option
-        energy_total = prediction_energy_final # + self_contributions_energy
+        energy_total = prediction_energy_final + self_contributions_energy
         return energy_total, prediction_forces_final
