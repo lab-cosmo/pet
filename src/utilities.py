@@ -493,7 +493,7 @@ def get_quadrature_predictions(batch, model, quadrature_order, inversions, dtype
         weights = [1.0]
 
     inverse_rotations = [r.T for r in rotations]
-
+    
     if inversions:
         rotations += [-r for r in rotations]
         inverse_rotations += [-r for r in inverse_rotations]

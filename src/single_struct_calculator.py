@@ -86,7 +86,7 @@ class SingleStructCalculator:
         )
         graph = graph.to(self.device)
 
-        if self.quadrature_order is None:
+        if self.quadrature_order is None and self.inversions==False:
             if torch.cuda.is_available() and (torch.cuda.device_count() > 1):
                 self.model.module.augmentation = self.use_augmentation
                 self.model.module.create_graph = False
@@ -100,7 +100,10 @@ class SingleStructCalculator:
             prediction_forces_final = prediction_forces.data.cpu().numpy()
         else:
             prediction_energy_final, prediction_forces_final = get_quadrature_predictions(
-                graph, self.model, self.quadrature_order, self.inversions, string2dtype(self.architectural_hypers.DTYPE)
+                graph, self.model, 
+                quadrature_order=self.quadrature_order, 
+                inversions=self.inversions, 
+                dtype=string2dtype(self.architectural_hypers.DTYPE)
             )
 
         compositional_features = get_compositional_features(
