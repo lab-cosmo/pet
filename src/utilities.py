@@ -111,7 +111,7 @@ class Logger:
         self.device = device
 
     def update(self, predictions_now, targets_now):
-        self.predictions.append(predictions_now.data.cpu().numpy())
+        self.predictions.append(predictions_now["prediction"].data.cpu().numpy())
         self.targets.append(targets_now.data.cpu().numpy())
 
     def flush(self):
@@ -261,6 +261,8 @@ def get_loss(predictions, targets, support_missing_values, use_shift_agnostic_lo
         else:
             return get_shift_agnostic_mse(predictions, targets)
     else:
+        if isinstance(predictions, dict):
+            predictions = predictions["prediction"]
         if support_missing_values:
             delta = predictions - targets
             mask_nan = torch.isnan(targets)

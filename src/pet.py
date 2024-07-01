@@ -328,6 +328,18 @@ class CentralSpecificModel(torch.nn.Module):
 
         result = self.uniter(result, central_indices)
         return result
+    
+class LinearAndFeatures(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        # A linear layer that also returns its inputs
+        super(LinearAndFeatures, self).__init__()
+        self.linear = nn.Linear(*args, **kwargs)
+
+    def forward(self, x):
+        return {
+            "features": x,
+            "output": self.linear(x),
+        }
 
 
 class Head(torch.nn.Module):
@@ -339,13 +351,16 @@ class Head(torch.nn.Module):
             get_activation(hypers),
             nn.Linear(n_neurons, n_neurons),
             get_activation(hypers),
-            nn.Linear(n_neurons, hypers.D_OUTPUT),
+            LinearAndFeatures(n_neurons, hypers.D_OUTPUT),
         )
 
     def forward(self, batch_dict: Dict[str, torch.Tensor]):
         pooled = batch_dict["pooled"]
         outputs = self.nn(pooled)
-        return {"atomic_predictions": outputs}
+        return {
+            "atomic_predictions": outputs["output"],
+            "features": outputs["features"],
+        }
 
 
 class CentralTokensPredictor(torch.nn.Module):
@@ -355,10 +370,15 @@ class CentralTokensPredictor(torch.nn.Module):
         self.hypers = hypers
 
     def forward(self, central_tokens: torch.Tensor, central_species: torch.Tensor):
-        predictions = self.head(
+        head_output = self.head(
             {"pooled": central_tokens, "central_species": central_species}
-        )["atomic_predictions"]
-        return predictions
+        )
+        predictions = head_output["atomic_predictions"]
+        features = head_output["features"]
+        return {
+            "atomic_predictions": predictions,
+            "features": features,
+        }
 
 
 class MessagesPredictor(torch.nn.Module):
@@ -403,20 +423,32 @@ class MessagesBondsPredictor(torch.nn.Module):
         central_species: torch.Tensor,
         multipliers: torch.Tensor,
     ):
-        predictions = self.head(
+        head_output = self.head(
             {"pooled": messages, "central_species": central_species}
-        )["atomic_predictions"]
+        )
+
+        predictions = head_output["atomic_predictions"]
+        features = head_output["features"]
 
         mask_expanded = mask[..., None].repeat(1, 1, predictions.shape[2])
         predictions = torch.where(mask_expanded, 0.0, predictions)
 
+        mask_expanded_features = mask[..., None].repeat(1, 1, features.shape[2])
+        features = torch.where(mask_expanded_features, 0.0, features)
+
         predictions = predictions * multipliers[:, :, None]
         if self.AVERAGE_BOND_ENERGIES:
+            raise NotImplementedError("AVERAGE_BOND_ENERGIES not implemented in the last-layer "
+                                      " feature branch.")
             total_weight = multipliers.sum(dim=1)[:, None]
             result = predictions.sum(dim=1) / total_weight
         else:
             result = predictions.sum(dim=1)
-        return result
+            features = features.sum(dim=1)
+        return {
+            "atomic_predictions": result,
+            "features": features,
+        }
 
 
 class PET(torch.nn.Module):
@@ -560,6 +592,7 @@ class PET(torch.nn.Module):
 
         batch_dict["input_messages"] = self.embedding(neighbor_species)
         atomic_predictions = torch.zeros(1, dtype=x.dtype, device=x.device)
+        last_layer_features = []
 
         for layer_index, (
             central_tokens_predictor,
@@ -585,31 +618,47 @@ class PET(torch.nn.Module):
             )
 
             if "central_token" in result.keys():
-                atomic_predictions = atomic_predictions + central_tokens_predictor(
+                predictor_output = central_tokens_predictor(
                     result["central_token"], central_species
                 )
+                atomic_predictions = atomic_predictions + predictor_output["atomic_predictions"]
+                last_layer_features.append(predictor_output["features"])
             else:
+                raise NotImplementedError(
+                    "Central token predictor not implemented in the last-layer feature "
+                    "branch."
+                )
                 atomic_predictions = atomic_predictions + messages_predictor(
                     output_messages, mask, nums, central_species, multipliers
                 )
 
             if self.USE_BOND_ENERGIES:
-                atomic_predictions = atomic_predictions + messages_bonds_predictor(
+                predictor_output = messages_bonds_predictor(
                     output_messages, mask, nums, central_species, multipliers
                 )
+                atomic_predictions = atomic_predictions + predictor_output["atomic_predictions"]
+                last_layer_features.append(predictor_output["features"])
+
+        last_layer_features = torch.concatenate(last_layer_features, dim=1)
 
         if self.TARGET_TYPE == "structural":
             if self.TARGET_AGGREGATION == "sum":
-                return torch_geometric.nn.global_add_pool(
+                prediction = torch_geometric.nn.global_add_pool(
                     atomic_predictions, batch=batch_dict["batch"]
                 )
+                last_layer_features = torch_geometric.nn.global_add_pool(
+                    last_layer_features, batch=batch_dict["batch"]
+                )
+                return {"prediction": prediction, "last_layer_features": last_layer_features}
             if self.TARGET_AGGREGATION == "mean":
+                raise NotImplementedError("mean aggregation not implemented in the last-layer "
+                                          "feature branch.")
                 return torch_geometric.nn.global_mean_pool(
                     atomic_predictions, batch=batch_dict["batch"]
                 )
             raise ValueError("unknown target aggregation")
         if self.TARGET_TYPE == "atomic":
-            return atomic_predictions
+            return {"prediction": atomic_predictions, "last_layer_features": last_layer_features}
         raise ValueError("unknown target type")
 
     def forward(
@@ -663,11 +712,14 @@ class PETMLIPWrapper(torch.nn.Module):
 
     def get_predictions(self, batch, augmentation):
         predictions = self.model(batch, augmentation=augmentation)
-        if predictions.shape[-1] != 1:
+        if predictions["prediction"].shape[-1] != 1:
             raise ValueError("D_OUTPUT should be 1 for MLIP; energy is a single scalar")
         # if predictions.shape[0] != batch.num_graphs:
         #    raise ValueError("model should return a single scalar per structure")
-        return predictions[..., 0]
+        return {
+            "prediction": predictions["prediction"][..., 0],
+            "last_layer_features": predictions["last_layer_features"],
+        }
 
     def forward(self, batch, augmentation, create_graph):
 
@@ -723,7 +775,7 @@ class SelfContributionsWrapper(torch.nn.Module):
         if self.model.hypers.D_OUTPUT != 1:
             raise ValueError("self contributions wrapper is made only for D_OUTPUT = 1")
 
-    def forward(self, batch_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, batch_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         predictions = self.model(batch_dict)
         central_species = batch_dict["central_species"]
         self_contribution_energies = self.self_contributions[central_species][:, None]
@@ -731,7 +783,11 @@ class SelfContributionsWrapper(torch.nn.Module):
             self_contribution_energies = torch_geometric.nn.global_add_pool(
                 self_contribution_energies, batch=batch_dict["batch"]
             )
-        return predictions + self_contribution_energies
+        output = {
+            "prediction": predictions["prediction"] + self_contribution_energies,
+            "last_layer_features": predictions["last_layer_features"],
+        }
+        return output
 
 
 class FlagsWrapper(torch.nn.Module):
