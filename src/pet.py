@@ -725,7 +725,7 @@ class PETMLIPWrapper(torch.nn.Module):
 
         if self.use_forces:
             batch.x.requires_grad = True
-            predictions = self.get_predictions(batch, augmentation)
+            predictions = self.get_predictions(batch, augmentation)["prediction"]
             grads = torch.autograd.grad(
                 predictions,
                 batch.x,
