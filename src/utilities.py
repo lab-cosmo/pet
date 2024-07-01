@@ -111,7 +111,9 @@ class Logger:
         self.device = device
 
     def update(self, predictions_now, targets_now):
-        self.predictions.append(predictions_now["prediction"].data.cpu().numpy())
+        if isinstance(predictions_now, dict):
+            predictions_now = predictions_now["prediction"]
+        self.predictions.append(predictions_now.data.cpu().numpy())
         self.targets.append(targets_now.data.cpu().numpy())
 
     def flush(self):
