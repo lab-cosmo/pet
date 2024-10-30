@@ -325,6 +325,7 @@ def get_loss(predictions, targets, support_missing_values, use_shift_agnostic_lo
             mask_not_nan = torch.logical_not(mask_nan)
             return torch.sum(delta * delta) / torch.sum(mask_not_nan)
         else:
+            targets = targets[:, :2]
             delta = predictions - targets
             return torch.mean(delta * delta)
 
@@ -337,6 +338,7 @@ def get_rmse(predictions, targets, support_missing_values=False):
         mask_not_nan = np.logical_not(mask_nan)
         return np.sqrt(np.sum(delta * delta) / np.sum(mask_not_nan))
     else:
+        targets = targets[:, :2]
         delta = predictions - targets
         return np.sqrt(np.mean(delta * delta))
 
@@ -349,6 +351,7 @@ def get_mae(predictions, targets, support_missing_values=False):
         mask_not_nan = np.logical_not(mask_nan)
         return np.sum(np.abs(delta)) / np.sum(mask_not_nan)
     else:
+        targets = targets[:, :2]
         delta = predictions - targets
         return np.mean(np.abs(delta))
 
