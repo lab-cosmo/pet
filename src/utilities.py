@@ -17,9 +17,7 @@ def log_epoch_stats(epoch, total_epochs, epoch_stats, learning_rate, energies_ke
 
     Parameters are the same as in the previous version, with added validation metrics.
     """
-
-    logging.info(f"Stats for Epoch {epoch}/{total_epochs}")
-    print(f"Learning Rate: {learning_rate:.3e}\n")
+    epoch_stats_log = f"Epoch: {epoch} | LR: {learning_rate:.3e} | "
 
     train_energies_mae = epoch_stats[energies_key]["train"]["mae"]
     train_energies_rmse = epoch_stats[energies_key]["train"]["rmse"]
@@ -32,36 +30,27 @@ def log_epoch_stats(epoch, total_epochs, epoch_stats, learning_rate, energies_ke
     val_forces_rmse = epoch_stats["forces"]["val"]["rmse"]
 
     if energies_key == "energies per structure":
-        energies_log_key = "[per structure]"
+        energies_log_key = ""
     elif energies_key == "energies per atom":
-        energies_log_key = "[per atom]"
+        energies_log_key = "/at."
     else:
         energies_log_key = ""
 
-    epoch_time = epoch_stats["epoch_time"]
+    # epoch_time = epoch_stats["epoch_time"]
     total_time = epoch_stats["elapsed_time"]
     estimated_remaining_time = epoch_stats["estimated_remaining_time"]
 
-    # Training metrics
-    print(f"Training Results:")
-    print(
-        f"  Energies {energies_log_key} MAE: {train_energies_mae:.3e}, RMSE: {train_energies_rmse:.3e}"
-    )
-    print(f"  Forces MAE: {train_forces_mae:.3e}, RMSE: {train_forces_rmse:.3e}\n")
+    epoch_stats_log += f"V-E-MAE{energies_log_key} {val_energies_mae:.2e} | "
+    epoch_stats_log += f"V-E-RMSE{energies_log_key} {val_energies_rmse:.2e} | "
+    epoch_stats_log += f"V-F-MAE {val_forces_mae:.2e} | "
+    epoch_stats_log += f"V-F-RMSE {val_forces_rmse:.2e} | "
+    epoch_stats_log += f"T-E-MAE{energies_log_key} {train_energies_mae:.2e} | "
+    epoch_stats_log += f"T-E-RMSE{energies_log_key} {train_energies_rmse:.2e} | "
+    epoch_stats_log += f"T-F-MAE {train_forces_mae:.2e} | "
+    epoch_stats_log += f"T-F-RMSE {train_forces_rmse:.2e} | "
 
-    # Validation metrics
-    print(f"Validation Results:")
-    print(
-        f"  Energies {energies_log_key} MAE: {val_energies_mae:.3e}, RMSE: {val_energies_rmse:.3e}"
-    )
-    print(f"  Forces MAE: {val_forces_mae:.3e}, RMSE: {val_forces_rmse:.3e}\n")
-
-    # Timing
-    print(f"Timing:")
-    print(f"  Time per epoch: {epoch_time:.2f} seconds")
-    print(f"  Total time elapsed: {total_time:.2f} seconds")
-    print(f"  Estimated remaining time: {estimated_remaining_time:.2f} seconds")
-    print("=" * 50)  # Divider for better readability between epochs
+    epoch_stats_log += f"Time/ETA: {total_time:.2f}/{estimated_remaining_time:.2f} s"
+    logging.info(epoch_stats_log)
 
 
 def get_calc_names(all_completed_calcs, current_name):
