@@ -167,7 +167,8 @@ def main():
                         batch, augmentation=USE_AUGMENTATION, create_graph=False
                     )
             else:
-                predictions_batch = model(batch, augmentation=USE_AUGMENTATION)
+                output_batch = model(batch, augmentation=USE_AUGMENTATION)
+                predictions_batch = output_batch.get("prediction")
 
             batch_accumulator.update(predictions_batch)
         predictions = batch_accumulator.flush()
