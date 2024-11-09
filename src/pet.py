@@ -650,21 +650,18 @@ class PET(torch.nn.Module):
         last_layer_features = torch.concatenate(last_layer_features, dim=1)
 
         if self.TARGET_TYPE == "structural":
-            if self.TARGET_AGGREGATION == "sum":
-                prediction = torch_geometric.nn.global_add_pool(
-                    atomic_predictions, batch=batch_dict["batch"]
-                )
-                last_layer_features = torch_geometric.nn.global_mean_pool(
-                    last_layer_features, batch=batch_dict["batch"]
-                )
-                return {"prediction": prediction, "last_layer_features": last_layer_features}
-            if self.TARGET_AGGREGATION == "mean":
-                raise NotImplementedError("mean aggregation not implemented in the last-layer "
-                                          "feature branch.")
-                return torch_geometric.nn.global_mean_pool(
-                    atomic_predictions, batch=batch_dict["batch"]
-                )
-            raise ValueError("unknown target aggregation")
+            pooling_functions = {
+                "sum": torch_geometric.nn.global_add_pool,
+                "mean": torch_geometric.nn.global_mean_pool
+            }
+            pooling_fn = pooling_functions.get(self.TARGET_AGGREGATION)
+            if pooling_fn is None:
+                raise ValueError(f"Unknown target aggregation: {self.TARGET_AGGREGATION}")
+
+            prediction = pooling_fn(atomic_predictions, batch=batch_dict["batch"])
+            llfs = pooling_fn(last_layer_features, batch=batch_dict["batch"])
+            return {"prediction": prediction, "last_layer_features": llfs}
+
         if self.TARGET_TYPE == "atomic":
             return {"prediction": atomic_predictions, "last_layer_features": last_layer_features}
         raise ValueError("unknown target type")
