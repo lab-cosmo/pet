@@ -659,7 +659,9 @@ class PET(torch.nn.Module):
                 raise ValueError(f"Unknown target aggregation: {self.TARGET_AGGREGATION}")
 
             prediction = pooling_fn(atomic_predictions, batch=batch_dict["batch"])
-            llfs = pooling_fn(last_layer_features, batch=batch_dict["batch"])
+            llfs = torch_geometric.nn.global_mean_pool(
+                last_layer_features, batch=batch_dict["batch"]
+            )
             return {"prediction": prediction, "last_layer_features": llfs}
 
         if self.TARGET_TYPE == "atomic":
