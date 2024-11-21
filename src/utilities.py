@@ -17,17 +17,24 @@ def log_epoch_stats(epoch, total_epochs, epoch_stats, learning_rate, energies_ke
 
     Parameters are the same as in the previous version, with added validation metrics.
     """
+
+    if "forces" in epoch_stats.keys():
+        write_forces_error = True
+    else:
+        write_forces_error = False
     epoch_stats_log = f"Epoch: {epoch} | LR: {learning_rate:.3e} | "
 
     train_energies_mae = epoch_stats[energies_key]["train"]["mae"]
     train_energies_rmse = epoch_stats[energies_key]["train"]["rmse"]
-    train_forces_mae = epoch_stats["forces"]["train"]["mae"]
-    train_forces_rmse = epoch_stats["forces"]["train"]["rmse"]
+    if write_forces_error:
+        train_forces_mae = epoch_stats["forces"]["train"]["mae"]
+        train_forces_rmse = epoch_stats["forces"]["train"]["rmse"]
 
     val_energies_mae = epoch_stats[energies_key]["val"]["mae"]
     val_energies_rmse = epoch_stats[energies_key]["val"]["rmse"]
-    val_forces_mae = epoch_stats["forces"]["val"]["mae"]
-    val_forces_rmse = epoch_stats["forces"]["val"]["rmse"]
+    if write_forces_error:
+        val_forces_mae = epoch_stats["forces"]["val"]["mae"]
+        val_forces_rmse = epoch_stats["forces"]["val"]["rmse"]
 
     if energies_key == "energies per structure":
         energies_log_key = ""
@@ -42,12 +49,14 @@ def log_epoch_stats(epoch, total_epochs, epoch_stats, learning_rate, energies_ke
 
     epoch_stats_log += f"V-E-MAE{energies_log_key} {val_energies_mae:.2e} | "
     epoch_stats_log += f"V-E-RMSE{energies_log_key} {val_energies_rmse:.2e} | "
-    epoch_stats_log += f"V-F-MAE {val_forces_mae:.2e} | "
-    epoch_stats_log += f"V-F-RMSE {val_forces_rmse:.2e} | "
+    if write_forces_error:
+        epoch_stats_log += f"V-F-MAE {val_forces_mae:.2e} | "
+        epoch_stats_log += f"V-F-RMSE {val_forces_rmse:.2e} | "
     epoch_stats_log += f"T-E-MAE{energies_log_key} {train_energies_mae:.2e} | "
     epoch_stats_log += f"T-E-RMSE{energies_log_key} {train_energies_rmse:.2e} | "
-    epoch_stats_log += f"T-F-MAE {train_forces_mae:.2e} | "
-    epoch_stats_log += f"T-F-RMSE {train_forces_rmse:.2e} | "
+    if write_forces_error:
+        epoch_stats_log += f"T-F-MAE {train_forces_mae:.2e} | "
+        epoch_stats_log += f"T-F-RMSE {train_forces_rmse:.2e} | "
 
     epoch_stats_log += f"Time/ETA: {total_time:.2f}/{estimated_remaining_time:.2f} s"
     logging.info(epoch_stats_log)
