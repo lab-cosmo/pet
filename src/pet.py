@@ -145,8 +145,7 @@ class CartesianTransformer(torch.nn.Module):
 
         self.neighbor_embedder = NeverRun()  # for torchscript
         if hypers.BLEND_NEIGHBOR_SPECIES and (not is_first):
-            self.neighbor_embedder = nn.Embedding(
-                n_atomic_species + 1, d_model)
+            self.neighbor_embedder = nn.Embedding(n_atomic_species + 1, d_model)
 
         self.add_central_token = add_central_token
 
@@ -189,8 +188,7 @@ class CartesianTransformer(torch.nn.Module):
         x = batch_dict["x"]
 
         if self.USE_LENGTH:
-            neighbor_lengths = torch.sqrt(
-                torch.sum(x**2, dim=2) + 1e-15)[:, :, None]
+            neighbor_lengths = torch.sqrt(torch.sum(x**2, dim=2) + 1e-15)[:, :, None]
         else:
             neighbor_lengths = torch.empty(
                 0, device=x.device, dtype=x.dtype
@@ -237,8 +235,7 @@ class CartesianTransformer(torch.nn.Module):
         coordinates = self.r_embedding(coordinates)
 
         if self.BLEND_NEIGHBOR_SPECIES and (not self.is_first):
-            tokens = torch.cat(
-                [coordinates, neighbor_embedding, input_messages], dim=2)
+            tokens = torch.cat([coordinates, neighbor_embedding, input_messages], dim=2)
         else:
             tokens = torch.cat([coordinates, input_messages], dim=2)
 
@@ -259,15 +256,13 @@ class CartesianTransformer(torch.nn.Module):
 
             tokens = torch.cat([central_token[:, None, :], tokens], dim=1)
 
-            submask = torch.zeros(
-                mask.shape[0], dtype=torch.bool).to(mask.device)
+            submask = torch.zeros(mask.shape[0], dtype=torch.bool).to(mask.device)
             total_mask = torch.cat([submask[:, None], mask], dim=1)
 
             lengths = torch.sqrt(torch.sum(x * x, dim=2) + 1e-16)
             multipliers = cutoff_func(lengths, self.R_CUT, self.CUTOFF_DELTA)
             sub_multipliers = torch.ones(mask.shape[0], device=mask.device)
-            multipliers = torch.cat(
-                [sub_multipliers[:, None], multipliers], dim=1)
+            multipliers = torch.cat([sub_multipliers[:, None], multipliers], dim=1)
             multipliers[total_mask] = 0.0
 
             multipliers = multipliers[:, None, :]
@@ -275,8 +270,7 @@ class CartesianTransformer(torch.nn.Module):
 
             output_messages = self.trans(
                 tokens[:, : (max_number + 1), :],
-                multipliers=multipliers[:, : (
-                    max_number + 1), : (max_number + 1)],
+                multipliers=multipliers[:, : (max_number + 1), : (max_number + 1)],
             )
             if max_number < initial_n_tokens:
                 padding = torch.zeros(
@@ -444,8 +438,10 @@ class MessagesBondsPredictor(torch.nn.Module):
 
         predictions = predictions * multipliers[:, :, None]
         if self.AVERAGE_BOND_ENERGIES:
-            raise NotImplementedError("AVERAGE_BOND_ENERGIES not implemented in the last-layer "
-                                      " feature branch.")
+            raise NotImplementedError(
+                "AVERAGE_BOND_ENERGIES not implemented in the last-layer "
+                " feature branch."
+            )
             total_weight = multipliers.sum(dim=1)[:, None]
             result = predictions.sum(dim=1) / total_weight
         else:
@@ -475,8 +471,7 @@ class PET(torch.nn.Module):
             add_central_tokens.append(hypers.ADD_TOKEN_FIRST)
         add_central_tokens.append(hypers.ADD_TOKEN_SECOND)
 
-        self.embedding = nn.Embedding(
-            n_atomic_species + 1, transformer_d_model)
+        self.embedding = nn.Embedding(n_atomic_species + 1, transformer_d_model)
         gnn_layers = []
         if transformers_central_specific:
             for layer_index in range(n_gnn_layers):
@@ -562,8 +557,7 @@ class PET(torch.nn.Module):
                 }
             else:
                 for _ in range(n_gnn_layers):
-                    bond_heads.append(
-                        Head(hypers, transformer_d_model, head_n_neurons))
+                    bond_heads.append(Head(hypers, transformer_d_model, head_n_neurons))
 
             self.bond_heads = torch.nn.ModuleList(bond_heads)
             self.messages_bonds_predictors = torch.nn.ModuleList(
@@ -629,7 +623,9 @@ class PET(torch.nn.Module):
                 predictor_output = central_tokens_predictor(
                     result["central_token"], central_species
                 )
-                atomic_predictions = atomic_predictions + predictor_output["atomic_predictions"]
+                atomic_predictions = (
+                    atomic_predictions + predictor_output["atomic_predictions"]
+                )
                 last_layer_features.append(predictor_output["features"])
             else:
                 raise NotImplementedError(
@@ -644,7 +640,9 @@ class PET(torch.nn.Module):
                 predictor_output = messages_bonds_predictor(
                     output_messages, mask, nums, central_species, multipliers
                 )
-                atomic_predictions = atomic_predictions + predictor_output["atomic_predictions"]
+                atomic_predictions = (
+                    atomic_predictions + predictor_output["atomic_predictions"]
+                )
                 last_layer_features.append(predictor_output["features"])
 
         last_layer_features = torch.concatenate(last_layer_features, dim=1)
@@ -657,16 +655,24 @@ class PET(torch.nn.Module):
                 last_layer_features = torch_geometric.nn.global_mean_pool(
                     last_layer_features, batch=batch_dict["batch"]
                 )
-                return {"prediction": prediction, "last_layer_features": last_layer_features}
+                return {
+                    "prediction": prediction,
+                    "last_layer_features": last_layer_features,
+                }
             if self.TARGET_AGGREGATION == "mean":
-                raise NotImplementedError("mean aggregation not implemented in the last-layer "
-                                          "feature branch.")
+                raise NotImplementedError(
+                    "mean aggregation not implemented in the last-layer "
+                    "feature branch."
+                )
                 return torch_geometric.nn.global_mean_pool(
                     atomic_predictions, batch=batch_dict["batch"]
                 )
             raise ValueError("unknown target aggregation")
         if self.TARGET_TYPE == "atomic":
-            return {"prediction": atomic_predictions, "last_layer_features": last_layer_features}
+            return {
+                "prediction": atomic_predictions,
+                "last_layer_features": last_layer_features,
+            }
         raise ValueError("unknown target type")
 
     def forward(
@@ -712,8 +718,7 @@ class PETMLIPWrapper(torch.nn.Module):
         self.use_energies = use_energies
         self.use_forces = use_forces
         if self.model.pet_model.hypers.D_OUTPUT != 1:
-            raise ValueError(
-                "D_OUTPUT should be 1 for MLIP; energy is a single scalar")
+            raise ValueError("D_OUTPUT should be 1 for MLIP; energy is a single scalar")
         if self.model.pet_model.hypers.TARGET_TYPE != "structural":
             raise ValueError("TARGET_TYPE should be structural for MLIP")
         if self.model.pet_model.hypers.TARGET_AGGREGATION != "sum":
@@ -722,8 +727,7 @@ class PETMLIPWrapper(torch.nn.Module):
     def get_predictions(self, batch, augmentation):
         predictions = self.model(batch, augmentation=augmentation)
         if predictions["prediction"].shape[-1] != 1:
-            raise ValueError(
-                "D_OUTPUT should be 1 for MLIP; energy is a single scalar")
+            raise ValueError("D_OUTPUT should be 1 for MLIP; energy is a single scalar")
         # if predictions.shape[0] != batch.num_graphs:
         #    raise ValueError("model should return a single scalar per structure")
         return {
@@ -750,7 +754,7 @@ class PETMLIPWrapper(torch.nn.Module):
             grads_messaged[batch.mask] = 0.0
             second = grads_messaged.sum(dim=1)
         else:
-            predictions = self.get_predictions(batch, augmentation)
+            predictions = self.get_predictions(batch, augmentation)["prediction"]
 
         result = []
         if self.use_energies:
@@ -790,7 +794,7 @@ class PETLLFWrapper(torch.nn.Module):
 
         return {
             "prediction": predictions["prediction"][..., 0],
-            "last_layer_features": predictions["last_layer_features"]
+            "last_layer_features": predictions["last_layer_features"],
         }
 
     def forward(self, batch, augmentation, create_graph):
@@ -818,8 +822,7 @@ class SelfContributionsWrapper(torch.nn.Module):
         else:
             self.TARGET_TYPE = "atomic"
         if self.model.hypers.D_OUTPUT != 1:
-            raise ValueError(
-                "self contributions wrapper is made only for D_OUTPUT = 1")
+            raise ValueError("self contributions wrapper is made only for D_OUTPUT = 1")
 
     def forward(self, batch_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         predictions = self.model(batch_dict)
